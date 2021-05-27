@@ -1,7 +1,5 @@
 <?php
 
-use fast\Http;
-
 class upload{
     const MSGTYPE_TEXT = 'text';
     const MSGTYPE_IMAGE = 'image';
