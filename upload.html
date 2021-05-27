@@ -1,0 +1,158 @@
+<div class="myPic_group">
+    <h5 class="myPic_group_tit">可以上传作品的照片<em></em></h5>
+    <div class="myPic_group_con">
+        <div id="div_imglook" class="div_photo">
+            <div class="lookimg" num="{$key}">
+                <!--主要是预览->value是上传到OSS返回的URL-->
+                <img src="#">
+                <div class="lookimg_delBtn" data-zpid="id" style="display: none;">移除</div>
+
+                <input type="hidden" name="photo[photo][]" value="imgUrl">
+            </div>
+            <div style="clear: both;"></div>
+        </div>
+        <!--样式div主要控制上传框样式-->
+        <div id="div_imgfile" class="image_group_con div_webuploader div_btn_photo">
+            <img src="__WAP__/images/add.png">
+        </div>
+    </div>
+
+    <input type="hidden" name="del_photo_id">
+</div>
+<!--引入WX JS-SDK-->
+<script src="http://res2.wx.qq.com/open/js/jweixin-1.6.0.js"></script>
+<!--引入主要上传JS-->
+<script src="upload.js"></script>
+<!--引入阿里云OSS.JS-->
+<script src="https://gosspublic.alicdn.com/aliyun-oss-sdk-6.8.0.min.js"></script>
+<!--微信SDK主要配置-->
+<script>
+    //将base64转换为文件对象
+    //微信wx.getLocalImgData返回的是base64格式，如果需要转化成文件对象
+    function dataURLtoFile(dataurl, filename) {
+        var arr = dataurl.split(',');
+        var mime = arr[0].match(/:(.*?);/)[1];
+        var bstr = atob(arr[1]);
+        var n = bstr.length;
+        var u8arr = new Uint8Array(n);
+        while(n--){
+            u8arr[n] = bstr.charCodeAt(n);
+        }
+        //转换成file对象
+        return new File([u8arr], filename, {type:mime});
+        //转换成成blob对象
+        //return new Blob([u8arr],{type:mime});
+    }
+    //主要的微信SDK  JS功能
+    $(function(){
+        //JS获取当前页面的URL，主要用户与后台获取的URL是否一致
+        //坑点：wx.config签名失败，确认签名正确，但是就是提示失败，请考虑是URL错误，进行对比
+        console.log(location.href.split('#')[0])
+        console.log("{$url}")
+        //注入wx.config的配置
+        //上传功能主要用到的API：jsApiList['chooseImage', 'previewImage', 'uploadImage', 'downloadImage','getLocalImgData']
+        wx.config({
+            beta: true,// 必须这么写，否则wx.invoke调用形式的jsapi会有问题
+            debug: false, // 开启调试模式,调用的所有api的返回值会在客户端alert出来，若要查看传入的参数，可以在pc端打开，参数信息会通过log打出，仅在pc端时才会打印。
+            appId: '{$wechat["appId"]}', // 必填，企业微信的corpID
+            timestamp: '{$wechat["timestamp"]}', // 必填，生成签名的时间戳
+            nonceStr: '{$wechat["nonceStr"]}', // 必填，生成签名的随机串
+            signature: '{$wechat["signature"]}',// 必填，签名，见 附录-JS-SDK使用权限签名算法
+            jsApiList: ['chooseImage', 'previewImage', 'uploadImage', 'downloadImage','getLocalImgData'] // 必填，需要使用的JS接口列表，凡是要调用的接口都需要传进来
+        });
+        wx.error(function(res){
+            // config信息验证失败会执行error函数，如签名过期导致验证失败，具体错误信息可以打开config的debug模式查看，也可以在返回的res参数中查看，对于SPA可以在这里更新签名。
+            layer.msg('网络异常');
+            return false;
+        });
+
+        //负责点击上传框后需要的限制逻辑
+        //这里限制可上传的数量
+        $('#div_imgfile').on('click', function () {
+            if (maxPhotoCount >= 0 && $("div.div_photo img").length >= maxPhotoCount) {
+                layer.msg('作品图片最多可上传' + maxPhotoCount + '张');
+                return false;
+            }
+            //微信SDK主要的上传功能，点击后出现拍照以及选择图片的功能
+            wx.chooseImage({
+                count: maxPhotoCount,
+                sizeType: ['original', 'compressed'],
+                sourceType: ['album', 'camera'],
+                success: function (res) {
+                    //res：主要选择成功后，返回localIds
+                    var  localIds=res.localIds;
+                    var  localIdsLen=localIds.length;
+                    console.log('chooseImage',res);
+                    //根据返回的localIds增加逻辑判断
+                    //这里判断的是选择图片上传的数量
+                    if (maxPhotoCount >= 0 && localIdsLen > maxPhotoCount) {
+                        layer.msg('作品图片最多可上传' + maxPhotoCount + '张');
+                        return false;
+                    }
+                    //这里也是控制图片上传的数量：主要是选择的数量和页面上以选择的数量相加
+                    if (maxPhotoCount >= 0 && ($("div.div_photo img").length + localIdsLen) > maxPhotoCount) {
+                        layer.msg('作品图片最多可上传' + maxPhotoCount + '张');
+                        return false;
+                    }
+                    //由于res返回的是数组，选择多张是数组，单张不知道，没试过
+                    //主要为了多张异步上传一张一张的传
+                    for (let k=0;k<localIdsLen;k++){
+                        //主要是获取上传图片的base64图片地址
+                        //坑点：getLocalImgData：IOS返回的Base64正常，安卓返回的需要去除\n并添加上前缀
+                        wx.getLocalImgData({
+                            localId: res.localIds[k], // 图片的localID
+                            success: function (rese) {
+                                //获取到base64的图片，主要通过localIds获取到，相当于一个id
+                                var localData = rese.localData;
+
+                                //主要是验证返回的base64图片是否符合规则
+                                //如果不存在base64则是安卓机，需要去除\r\n,并添加前缀
+                                if (localData.indexOf("base64") < 0){
+                                    var resStr=localData.replace(/[\r\n]/g,"");
+                                    localData='data:image/png;base64,'+resStr
+                                }
+                                // localData是图片的base64数据，可以用img标签显示
+                                //这里是主要获取图片的后缀名，当然安卓机没有，默认PNG
+                                var strLen=localData.replace (/(.*);base64.*/, '$1');
+                                var str4 = strLen.slice(11,strLen.length);
+                                //获取到图片并转成流的格式请求上传的JS
+                                newOss(dataURLtoFile(localData,'photo.'+str4));
+                                /*console.log('FileObj',dataURLtoFile(localData,'photo.'+str4))
+                                console.log('getLocalImgDataIds',localIds)
+                                console.log('Base64',localData)*/
+                            }
+                        });
+                    }
+                }
+
+            });
+        });
+    });
+
+</script>
+<!--不用微信JS-SDK，使用wepUpload-->
+<script>
+    $(function () {
+        //生成html信息也就是上传input，所规定的参数
+        ossUpload('photo', {
+            inputAttrs: {
+                accept: 'image/*',
+                multiple: true,
+            },
+            mimetype: 'jpg|jpeg|png',
+            singleFileSize: 1024 * 1024 * 2,//单个文件大小
+            funValid: function (files, file) {
+                //file：上传图片的文件流
+                console.log(files)
+                console.log(file)
+                if (maxPhotoCount >= 0) {
+                    let imgl = $('div.div_photo img').length || 0, t = imgl + files.length;
+                    if (t > maxPhotoCount) {
+                        layer.msg('图片上传超限，当前只能上传' + (maxPhotoCount - imgl) + '张图片');
+                        return false;
+                    }
+                }
+            }
+        });
+    });
+</script>
